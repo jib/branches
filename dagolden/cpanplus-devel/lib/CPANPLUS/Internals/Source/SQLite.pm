@@ -16,6 +16,8 @@ use DBD::SQLite;
 use Params::Check               qw[allow check];
 use Locale::Maketext::Simple    Class => 'CPANPLUS', Style => 'gettext';
 
+use constant TXN_COMMIT => 1000;
+
 =head1 NAME 
 
 CPANPLUS::Internals::Source::SQLite - SQLite implementation
@@ -43,8 +45,11 @@ CPANPLUS::Internals::Source::SQLite - SQLite implementation
         return $Dbh if $Dbh;
         
         my $self = shift;
-        $Dbh     = DBIx::Simple->connect("dbi:SQLite:dbname=" . $self->__sqlite_file );
-
+        $Dbh     = DBIx::Simple->connect(
+                        "dbi:SQLite:dbname=" . $self->__sqlite_file,
+                        '', '',
+                        { AutoCommit => 0 }
+                    );
         #$Dbh->dbh->trace(1);
 
         return $Dbh;        
@@ -103,72 +108,107 @@ CPANPLUS::Internals::Source::SQLite - SQLite implementation
             $self->_mtree( \%mt  );
         }
         
+        ### start a transaction
+        $self->__sqlite_dbh->query('BEGIN');
+        
         return 1;        
         
     }
     
     sub _standard_trees_completed   { return $used_old_copy }
     sub _custom_trees_completed     { return }
-    sub _finalize_trees             { return 1 }
+    ### finish transaction
+    sub _finalize_trees             { $_[0]->__sqlite_dbh->query('COMMIT'); return 1 }
 }
 
-sub _add_author_object {
-    my $self = shift;
-    my %hash = @_;
-    my $dbh  = $self->__sqlite_dbh;
-    
+{   my $txn_count = 0;
+
+    ### XXX move this outside the sub, so we only compute it once
     my $class;
-    my $tmpl = {
+    my @keys    = qw[ author cpanid email ];
+    my $tmpl    = {
         class   => { default => 'CPANPLUS::Module::Author', store => \$class },
-        map { $_ => { required => 1 } } 
-            qw[ author cpanid email ]
-    };
-
-    my $href = do {
-        local $Params::Check::NO_DUPLICATES = 1;
-        check( $tmpl, \%hash ) or return;
-    };
+        map { $_ => { required => 1 } } @keys
+     };
     
-    $dbh->query( 
-        "INSERT INTO author (". join(',',keys(%$href)) .") VALUES (??)",
-        values %$href
-    ) or do {
-        error( $dbh->error );
-        return;
-    };
+    ### dbix::simple's expansion of (??) is REALLY expensive, so do it manually
+    my $ph      = join ',', map { '?' } @keys;
+
+
+    sub _add_author_object {
+        my $self = shift;
+        my %hash = @_;
+        my $dbh  = $self->__sqlite_dbh;
     
-    return 1;
- }
+        my $href = do {
+            local $Params::Check::NO_DUPLICATES         = 1;            
+            local $Params::Check::SANITY_CHECK_TEMPLATE = 0;
+            check( $tmpl, \%hash ) or return;
+        };
 
-sub _add_module_object {
-    my $self = shift;
-    my %hash = @_;
-    my $dbh  = $self->__sqlite_dbh;
+        ### keep counting how many we inserted
+        unless( ++$txn_count % TXN_COMMIT ) {
+            #warn "Committing transaction $txn_count";
+            $dbh->query('COMMIT') or error( $dbh->error ); # commit previous transaction
+            $dbh->query('BEGIN')  or error( $dbh->error ); # and start a new one
+        }
+        
+        $dbh->query( 
+            "INSERT INTO author (". join(',',keys(%$href)) .") VALUES ($ph)",
+            values %$href
+        ) or do {
+            error( $dbh->error );
+            return;
+        };
+        
+        return 1;
+     }
+}
 
+{   my $txn_count = 0;
+
+    ### XXX move this outside the sub, so we only compute it once
     my $class;    
+    my @keys = qw[ module version path comment author package description dslip mtime ];
     my $tmpl = {
         class   => { default => 'CPANPLUS::Module', store => \$class },
-        map { $_ => { required => 1 } } 
-            qw[ module version path comment author package description dslip mtime ]
+        map { $_ => { required => 1 } } @keys
     };
+    
+    ### dbix::simple's expansion of (??) is REALLY expensive, so do it manually
+    my $ph      = join ',', map { '?' } @keys;
 
-    my $href = do {
-        local $Params::Check::NO_DUPLICATES = 1;
-        check( $tmpl, \%hash ) or return;
-    };
+    sub _add_module_object {
+        my $self = shift;
+        my %hash = @_;
+        my $dbh  = $self->__sqlite_dbh;
     
-    ### fix up author to be 'plain' string
-    $href->{'author'} = $href->{'author'}->cpanid;
-    
-    $dbh->query( 
-        "INSERT INTO module (". join(',',keys(%$href)) .") VALUES (??)",
-        values %$href
-    ) or do {
-        error( $dbh->error );
-        return;
-    };
-    
-    return 1;
+        my $href = do {
+            local $Params::Check::NO_DUPLICATES         = 1;
+            local $Params::Check::SANITY_CHECK_TEMPLATE = 0;
+            check( $tmpl, \%hash ) or return;
+        };
+        
+        ### fix up author to be 'plain' string
+        $href->{'author'} = $href->{'author'}->cpanid;
+
+        ### keep counting how many we inserted
+        unless( ++$txn_count % TXN_COMMIT ) {
+            #warn "Committing transaction $txn_count";
+            $dbh->query('COMMIT') or error( $dbh->error ); # commit previous transaction
+            $dbh->query('BEGIN')  or error( $dbh->error ); # and start a new one
+        }
+        
+        $dbh->query( 
+            "INSERT INTO module (". join(',',keys(%$href)) .") VALUES ($ph)", 
+            values %$href
+        ) or do {
+            error( $dbh->error );
+            return;
+        };
+        
+        return 1;
+    }
 }
 
 {   my %map = (
