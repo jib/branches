@@ -307,7 +307,7 @@ sub _check_trees {
     for my $name (qw[auth dslip mod]) {
         for my $file ( $conf->_get_source( $name ) ) {
             $self->__check_uptodate(
-                file            => File::Spec->catfile( $path, $file ),
+                file            => File::Spec->catfile( $args->{path}, $file ),
                 name            => $name,
                 update_source   => $update_source,
                 verbose         => $verbose,
@@ -661,8 +661,8 @@ sub _create_mod_tree {
         ### remove file name from the path
         $data[2] =~ s|/[^/]+$||;
 
-        my $aobj = $self->author_tree($author);
-        unless( $aobj ) {
+
+        unless( $self->author_tree($author) ) {
             error( loc( "No such author '%1' -- can't make module object " .
                         "'%2' that is supposed to belong to this author",
                         $author, $data[0] ) );
@@ -679,11 +679,6 @@ sub _create_mod_tree {
                             ? $dslip_tree->{ $data[0] }->{$item}
                             : ' ';
         }
-        
-        ### XXX this could be sped up if we used author names, not author
-        ### objects in creation, and then look them up in the author tree
-        ### when needed. This will need a fix to all the places that create
-        ### fake author/module objects as well.
 
         ### callback to store the individual object
         $self->_add_module_object(
@@ -697,7 +692,7 @@ sub _create_mod_tree {
                             ),          # extended path on the cpan mirror,
                                         # like /A/AB/ABIGAIL
             comment     => $data[3],    # comment on the module
-            author      => $aobj,
+            author      => $self->author_tree($author),
             package     => $package,    # package name, like
                                         # 'foo-bar-baz-1.03.tar.gz'
             description => $dslip_tree->{ $data[0] }->{'description'},
@@ -1339,7 +1334,7 @@ Returns true on success, false on failure.
     
             my $fh = OPEN_FILE->( $file ) or next;
     
-            while( local $_ = <$fh> ) {
+            while( <$fh> ) {
                 chomp;
                 next if /^#/;
                 next unless /\S+/;

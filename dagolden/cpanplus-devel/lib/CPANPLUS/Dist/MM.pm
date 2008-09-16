@@ -472,7 +472,7 @@ sub _find_prereqs {
     }
     
     my %p;
-    while( local $_ = <$fh> ) {
+    while( <$fh> ) {
         my ($found) = m|^[\#]\s+PREREQ_PM\s+=>\s+(.+)|;         
         
         next unless $found;
