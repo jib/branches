@@ -463,8 +463,14 @@ sub _find_prereqs {
         file    => { required => 1, allow => FILE_READABLE, store => \$file },
     };
     
-    my $args = check( $tmpl, \%hash ) or return;      
+    check( $tmpl, \%hash ) or return;      
+
+    ### see if we got prereqs from MYMETA
+    my $prereqs = $dist->find_mymeta_requires( );
     
+    ### we found some prereqs, we'll trust MYMETA
+    return $prereqs if keys %$prereqs;
+
     my $fh = FileHandle->new();
     unless( $fh->open( $file ) ) {
         error( loc( "Cannot open '%1': %2", $file, $! ) );
